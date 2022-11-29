@@ -11,6 +11,7 @@ from datetime import datetime
 import geopy
 import json
 import numpy as np
+import pandas as pd
 import streamlit as st
 import socket
 
@@ -26,60 +27,48 @@ bq = BigQuery(svc_account_file=svc_account_file)
 #################################
 
 @st.cache(max_entries=10, ttl=600)
-def load_ofo_data(country_code, lat, lng, string_match, string_exclude, radius, exclude_primary_cuisine,include_primary_cuisine,exclude_store_names):
+def load_ofo_data(country_codes_filter, geo_filters, string_match, string_exclude, exclude_primary_cuisine,include_primary_cuisine,exclude_store_names):
         
     ofo_sql_gc = '''
-        SELECT item_name, clean_name, price, latitude, longitude, store_name, primary_cuisine
+        SELECT month, item_name, clean_name, price, latitude, longitude, store_name, primary_cuisine
         FROM `css-operations.brand_science.pricing_ofo_scrape_data`
         WHERE 1=1
-            AND country_code = '{country_code}'
-            AND ST_DISTANCE(
-                ST_GEOGPOINT(longitude, latitude),
-                ST_GEOGPOINT({lng},   {lat})
-            ) <= {radius}
+            {country_codes_filter}
+            {geo_filters}
             {string_match}
             {string_exclude}
             {exclude_primary_cuisine}
             {include_primary_cuisine}
             {exclude_store_names}
     '''.format(
-        country_code=country_code, 
-        lat=lat, 
-        lng=lng, 
+        country_codes_filter=country_codes_filter, 
+        geo_filters=geo_filters,
         string_match=string_match, 
         string_exclude=string_exclude, 
-        radius=radius, 
         exclude_primary_cuisine=exclude_primary_cuisine, 
         include_primary_cuisine=include_primary_cuisine,
         exclude_store_names=exclude_store_names
         )
 
-    st.write(ofo_sql_gc)
-
     return bq.run_query(ofo_sql_gc)
 
 @st.cache(max_entries=10, ttl=600)
-def load_otter_data(country_code, lat, lng, string_match, string_exclude, radius, exclude_brand_names):
+def load_otter_data(country_codes_filter, geo_filters, string_match, string_exclude, exclude_brand_names):
     
     otter_sql_gc = '''
-        SELECT brand_name, item_name, clean_name, CAST(month AS DATE) AS month, mean_price AS price, total_orders, total_qty_ordered, latitude, longitude
-        FROM `css-operations.brand_science.pricing_demand_data`
+        SELECT brand_name, item_name, clean_name, CAST(month AS DATE) AS month, price, total_orders, total_qty_ordered, latitude, longitude
+        FROM `css-operations.brand_science.pricing_otter_data`
         WHERE 1=1
-            AND country_code = '{country_code}'
-            AND ST_DISTANCE(
-                ST_GEOGPOINT(longitude, latitude),
-                ST_GEOGPOINT({lng},   {lat})
-            ) <= {radius}
+            {country_codes_filter}
+            {geo_filters}
             {string_match}
             {string_exclude}
             {exclude_brand_names}
     '''.format(
-        country_code=country_code, 
-        lat=lat, 
-        lng=lng, 
+        country_codes_filter=country_codes_filter, 
+        geo_filters=geo_filters,
         string_match=string_match, 
         string_exclude=string_exclude, 
-        radius=radius,
         exclude_brand_names=exclude_brand_names
     )
 
@@ -92,6 +81,10 @@ def load_primary_cuisine():
     return np.unique([x.lower() for x in df['primary_cuisine'].tolist() if x != None])
 
 @st.cache
+def load_cities():
+    return pd.read_csv('worldcities.csv').sort_values(['iso2'])
+
+@st.cache
 def load_store_names():
     q = 'SELECT DISTINCT store_name FROM `css-operations.brand_science.pricing_ofo_scrape_data`'
     df = bq.run_query(q)
@@ -100,6 +93,37 @@ def load_store_names():
 #################################
 ### QUERY ARGS FUNCTIONS
 #################################
+
+def get_country_codes_filter(country_codes):
+    
+    if country_codes != '' and len(country_codes) > 0:
+            return '''AND country_code IN ("{}")'''.format('","'.join(country_codes))
+    else:
+        return ''
+
+def get_st_distance_filters(lats, lngs, radius):
+    s = 'AND ('
+    for i, (lat, lng) in enumerate(zip(lats, lngs)):
+        
+        if i == len(lats)-1:
+            s += '''
+                ST_DISTANCE(
+                    ST_GEOGPOINT(longitude, latitude),
+                    ST_GEOGPOINT({lng},   {lat})
+                ) <= {radius}
+
+            '''.format(lat=lat, lng=lng, radius=radius)
+        
+        else:
+            s += '''
+                ST_DISTANCE(
+                    ST_GEOGPOINT(longitude, latitude),
+                    ST_GEOGPOINT({lng},   {lat})
+                ) <= {radius} OR
+
+            '''.format(lat=lat, lng=lng, radius=radius)
+
+    return s + ')'
 
 def get_search_term_query(search_term, search_method='Contains'):
     l = [string_to_clean_name(x).strip() for x in search_term.split(' ')]
@@ -207,3 +231,13 @@ def log_user_actions(d, action_type, json_args=None, table=config.user_tracking_
         print("New rows have been added.")
     else:
         print("Encountered errors while inserting rows: {}".format(errors))
+
+def set_session_state_0():
+    if 's' not in st.session_state:
+        st.session_state.s = 0
+    else:
+        st.session_state.s = 0
+
+@st.cache
+def convert_df(df):
+   return df.to_csv().encode('utf-8')

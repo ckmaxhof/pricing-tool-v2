@@ -4,11 +4,13 @@ sys.path.append('/home/maximilian.hofmann/ff_utils/src')
 
 import constants as const
 import functions as fun
+import maps_utils as mu
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import folium_static
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 import folium
 from folium.plugins import MarkerCluster
 import plotly.express as px
@@ -28,12 +30,14 @@ user_actions['tool_name'] = 'brand_science_pricing'
 # user_actions['user_id'] = user_id
 
 primary_cuisines = fun.load_primary_cuisine()
+cities_df = fun.load_cities()
 
 #####################
 ### Text Block
 #####################
 st.title('Pricing Tool | Brand Science')
-st.markdown('This tool gives a hollistic overview of setting an initial price for a menu item in a given geography. We are combining supply (OFO scrape) and demand (Otter orders) data in order to calculate an effective price.')
+st.markdown('This tool gives a hollistic overview of setting an initial price for a menu item in a given geography. We are combining marketintel data (OFO scrapes) and Otter data in order to calculate an effective price.')
+st.markdown('You can check current data coverage in [this sheet](https://docs.google.com/spreadsheets/d/1gxB_60JSDvb2nVObVfSFB66qfWRIFyyNoAcEh-AvmcU/edit?usp=sharing).')
 st.markdown('More details on the methodology can be found [here](https://docs.google.com/document/d/1VODjLh1_7F_2lE0IhuTGQRVaga546Vy7Gy4WLNbDwVE/edit#heading=h.8n2n4oy69nrt).')
 st.markdown('We need your feedback! Please use [this form](https://forms.gle/mZmqGKw5Q1bTMa97A) to submit your feature requests, bug reports and wishes.')
 st.markdown('If you have any questions, please reach out to @maximilian.hofmann.')
@@ -41,63 +45,82 @@ st.markdown('If you have any questions, please reach out to @maximilian.hofmann.
 #####################
 ### User Inputs
 #####################  
-with st.form("query_form"):
-    st.subheader("Please select your inputs:")
-    city, country_code, radius = st.columns(3)
-    with city:
-        city_input = st.text_input('City', 'London')
 
-    with country_code:
-        country_input = st.selectbox('Country', options=const.country_codes, index=0)
+city_col, country_col, radius_col = st.columns(3)
 
-    with radius:
-        radius_input = st.number_input('Radius (in km)', min_value=0, value=10)
-        radius_input = radius_input * 1000
+cities_input = city_col.multiselect(
+    label='Cities',
+    options=cities_df['city'].unique(),
+    default='London',
+    on_change=fun.set_session_state_0
+)
 
-    search_option, search_string = st.columns([2, 8])
-    with search_option:
-        search_method = st.radio('String Search Method', ('Contains', 'Equals'))
-    with search_string:
-        search_string_inputs = st.text_input('Please type in the items you are looking for. If multiple, please separate by comma.')
+country_codes_input = country_col.multiselect(
+    label='Country Codes',
+    options=cities_df[cities_df['city'].isin(cities_input)]['iso2'].unique(),
+    on_change=fun.set_session_state_0
+)
 
-    with st.expander("Additional Filters"):
+radius_input = radius_col.number_input('Radius (in km)', min_value=0, value=10, on_change=fun.set_session_state_0)
+radius_input = radius_input * 1000
 
-        exclude_string_input = st.text_input(
-            'Exclude specific words. If multiple, please separate by comma.'
-        )
+search_option_col, search_string_col = st.columns([2, 8])
+search_method = search_option_col.radio('String Search Method', ('Contains', 'Equals'), on_change=fun.set_session_state_0)
+search_string_inputs = search_string_col.text_input('Please type in the items you are looking for. If multiple, please separate by comma.', on_change=fun.set_session_state_0)
 
-        exclude_primary_cuisine_col, exclude_store_names_col = st.columns(2)
-        with exclude_primary_cuisine_col:
-            exclude_primary_cuisine = st.multiselect(
-                label='Exclude primary cuisine tags (OFO scrape data)',
-                options=primary_cuisines,
-                default=None
-            )
-        with exclude_store_names_col:
-            exclude_store_names = st.text_input(
-                label='Exclude store names / brand names'
-            )
-        include_primary_cuisine = st.multiselect(
-            label='Include primary cuisine tags (OFO scrape data)',
+with st.expander("Additional Filters"):
+
+    exclude_string_input = st.text_input(
+        'Exclude specific words. If multiple, please separate by comma.'
+    )
+
+    exclude_primary_cuisine_col, exclude_store_names_col = st.columns(2)
+    with exclude_primary_cuisine_col:
+        exclude_primary_cuisine = st.multiselect(
+            label='Exclude primary cuisine tags (OFO scrape data)',
             options=primary_cuisines,
             default=None
         )
+    with exclude_store_names_col:
+        exclude_store_names = st.text_input(
+            label='Exclude store names / brand names'
+        )
+    include_primary_cuisine = st.multiselect(
+        label='Include primary cuisine tags (OFO scrape data)',
+        options=primary_cuisines,
+        default=None
+    )
 
-    show_map = st.checkbox('MAP ME OUT!')
+show_map = st.checkbox('MAP ME OUT!')
 
-    run_query_button = st.form_submit_button("Run Query")
+b_col_1, b_col_2 = st.columns(2)
+b = b_col_1.button('Run Query')
+reset = b_col_2.button('Reset App')
 
-if run_query_button:
+if 's' not in st.session_state:
+    st.session_state.s = 0
 
-    lat, lng = fun.get_lat_lng_from_str(city_input)
+if b:
+    st.session_state.s += 1
+
+if reset:
+    st.session_state.s = 0
+
+if st.session_state.s > 0: 
+
+    cities_df_filtered = cities_df[(cities_df['city'].isin(cities_input))&(cities_df['iso2'].isin(country_codes_input))]
+
+    cities_df_filtered = cities_df_filtered[['iso2','city','lat','lng']].drop_duplicates()
+
+    geo_filter_list = list(zip(cities_df_filtered['iso2'], cities_df_filtered['city'], cities_df_filtered['lat'], cities_df_filtered['lng']))
+    lats = cities_df_filtered['lat'].tolist()
+    lngs = cities_df_filtered['lng'].tolist()
+    country_codes = cities_df_filtered['iso2'].unique().tolist()
 
     # LOG ACTION
     query_args = {
         'testing':True,
-        'country_code':country_input,
-        'city': city_input,
-        'lat': lat,
-        'lng': lng,
+        'geo_filter_list': geo_filter_list,
         'radius': radius_input,
         'search_item_list': search_string_inputs,
         'exclude_string_input': exclude_string_input,
@@ -113,8 +136,9 @@ if run_query_button:
 
     for i, search_string_input in enumerate(search_item_list):
 
-        m = folium.Map(location=[lat, lng], zoom_start=10)
-        folium.Circle([lat, lng], radius=radius_input).add_to(m)
+        m = folium.Map(location=[lats[0], lngs[0]], zoom_start=10)
+        for lat, lng in zip(lats, lngs):
+            folium.Circle([lat, lng], radius=radius_input).add_to(m)
 
         tabs[i].title('Summary')
 
@@ -123,12 +147,10 @@ if run_query_button:
             ### CALCULATIONS
             ### Supply
             ofo_df = fun.load_ofo_data(
-                country_input, 
-                lat, 
-                lng, 
+                fun.get_country_codes_filter(country_codes), 
+                fun.get_st_distance_filters(lats, lngs, radius_input),
                 fun.get_search_term_query(search_string_input, search_method), 
                 fun.get_exclude_term_query(exclude_string_input), 
-                radius_input, 
                 fun.get_exclude_primary_cuisines_query(exclude_primary_cuisine),
                 fun.get_include_primary_cuisines_query(include_primary_cuisine),
                 fun.get_exclude_store_names_query(exclude_store_names)
@@ -140,11 +162,22 @@ if run_query_button:
                 ofo_mean = ofo_df.price.mean()
                 ofo_median = ofo_df.price.median()
 
+                ofo_plot_df = ofo_df.groupby(['month']).agg(
+                    clean_name=("clean_name", "nunique"),
+                    price=("price", "mean")
+                ).reset_index(drop=False)
+
                 ofo_histogram = px.histogram(ofo_df, x='price')
                 ofo_histogram_df = ofo_df[['item_name', 'price']]
                 ofo_histogram_df = ofo_histogram_df.assign(data_source='OFO Scrape')
 
-                histogram_df = pd.concat([histogram_df, ofo_histogram_df])
+                ofo_recent_updates_by_item_df = ofo_df.groupby(['store_name','item_name']).agg({'month':'max'}).reset_index(drop=False)
+                ofo_recent_prices_df = pd.merge(ofo_df, ofo_recent_updates_by_item_df, on=['store_name','item_name','month'], how='inner')
+
+                ofo_recent_prices_df = ofo_recent_prices_df.assign(data_source='OFO Scrape')
+
+                histogram_df = pd.concat([histogram_df, ofo_recent_prices_df[['item_name','price','data_source']]])
+                # histogram_df = pd.concat([histogram_df, ofo_histogram_df])
 
                 ofo_df = ofo_df.dropna()
 
@@ -158,7 +191,7 @@ if run_query_button:
                             tooltip = str(primary_cuisine) + '<br>' + store_name + '<br>' + name + '<br>' + str(round(price,2))
                         )
                         marker.add_to(marker_cluster)
-                    marker_cluster.add_to(m)    
+                    marker_cluster.add_to(m) 
 
             else:
                 ofo_mean = np.nan
@@ -167,12 +200,10 @@ if run_query_button:
 
             ### Demand
             otter_df = fun.load_otter_data(
-                country_input, 
-                lat, 
-                lng, 
+                fun.get_country_codes_filter(country_codes), 
+                fun.get_st_distance_filters(lats, lngs, radius_input),
                 fun.get_search_term_query(search_string_input, search_method), 
                 fun.get_exclude_term_query(exclude_string_input), 
-                radius_input,
                 fun.get_exclude_brand_names_query(exclude_store_names)
             )
 
@@ -233,15 +264,7 @@ if run_query_button:
             with metric_col_otter_4:
                 metric_col_otter_4.metric('Otter Last Month Mean Price', '{}'.format(round(otter_mean_last_month, 2)))
 
-            # histogram_chart = px.histogram(
-            #     histogram_df, 
-            #     x='price', 
-            #     color='data_source', 
-            #     barmode='overlay', 
-            #     histnorm='density',
-            #     title=
-            #     )
-            # tabs[i].plotly_chart(histogram_chart, use_container_width=True)
+            tabs[i].markdown("""---""")
 
             histogram_df = histogram_df.dropna()
             histogram_data = [
@@ -262,12 +285,76 @@ if run_query_button:
             fig = ff.create_distplot(histogram_data, ['OFO Scrape', 'Otter'], show_rug=False)
             tabs[i].plotly_chart(fig, use_container_width=True)
 
+            tabs[i].markdown("""---""")
+
+            if ofo_df.shape[0] > 0:
+                tabs[i].markdown('## Historical Prices Ofo Scrapes')
+                tabs[i].write('This chart illustrates the historical price development of OFO scrape means.')
+
+                ofo_plot_df['month'] = pd.to_datetime(ofo_plot_df['month'], format='%Y-%m-%d')
+
+                ofo_subfig = make_subplots(specs=[[{"secondary_y": True}]])
+                ofo_fig_bar = px.bar(x=ofo_plot_df['month'], y=ofo_plot_df['clean_name'], color=px.Constant("Item Count"))
+                ofo_fig_line = px.line(x=ofo_plot_df['month'], y=ofo_plot_df['price'], color=px.Constant("Mean Price"))
+                ofo_fig_line.update_traces(line_color='#DD6046', line_width=5)
+                ofo_fig_line.update_traces(yaxis="y2")
+                ofo_subfig.add_traces(ofo_fig_bar.data + ofo_fig_line.data)
+                ofo_subfig.layout.xaxis.title = 'Month'
+                ofo_subfig.layout.yaxis.title = 'Unique Item Count'
+                ofo_subfig.layout.yaxis2.title = 'Mean Price'
+
+                tabs[i].plotly_chart(ofo_subfig, use_container_width=True)
+
+                with tabs[i].expander('Detailed Dataframe'):
+                    
+                    builder = GridOptionsBuilder.from_dataframe(ofo_df[['month', 'primary_cuisine', 'store_name', 'item_name', 'price']])
+                    # builder.configure_selection(
+                    #     'multiple', 
+                    #     use_checkbox=True, 
+                    #     groupSelectsChildren=True, 
+                    #     groupSelectsFiltered=True
+                    # )
+                    builder.configure_default_column(
+                        groupable=True, 
+                        value=True, 
+                        enableRowGroup=True, 
+                        aggFunc='sum', editable=True
+                    )
+
+                    builder.configure_column("month", type=["dateColumnFilter","customDateTimeFormat"], custom_format_string='yyyy-MM-dd')
+                    builder.configure_column('item_name', aggFunc='sum')
+                    builder.configure_column('price', aggFunc='avg')
+                    builder.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
+                    go = builder.build()
+
+                    #uses the gridOptions dictionary to configure AgGrid behavior.
+                    grid_response = AgGrid(
+                        data=ofo_df[['month', 'primary_cuisine', 'store_name', 'item_name', 'price']], 
+                        gridOptions=go,
+                        update_mode=GridUpdateMode.__members__['GRID_CHANGED'],
+                        fit_columns_on_grid_load=True,
+                        )
+                    
+                    df = grid_response['data']
+                    selected = grid_response['selected_rows']
+                    selected_df = pd.DataFrame(selected)
+
+                    # st.dataframe(selected_df)
+
+                    csv = fun.convert_df(ofo_df)
+                    st.download_button(
+                        "Download Dataframe as CSV",
+                        csv,
+                        "ofo_scrape_df.csv",
+                        "text/csv"
+                    )
+
             if otter_df.shape[0] > 0:
                 tabs[i].markdown('## Historical Prices Otter')
                 tabs[i].write('This chart illustrates the historical price development of Otter means. The weighted mean price is the average price per month, weighted by the quantity the item was ordered.')
 
                 otter_plot_df['month'] = pd.to_datetime(otter_plot_df['month'], format='%Y-%m-%d')
-
+                
                 otter_subfig = make_subplots(specs=[[{"secondary_y": True}]])
                 otter_fig_bar = px.bar(x=otter_plot_df['month'], y=otter_plot_df['clean_name'], color=px.Constant("Item Count"))
                 otter_fig_line = px.line(x=otter_plot_df['month'], y=otter_plot_df['price'], color=px.Constant("Mean Price"))
@@ -281,61 +368,59 @@ if run_query_button:
                 otter_subfig.layout.yaxis.title = 'Unique Item Count'
                 otter_subfig.layout.yaxis2.title = 'Mean Price'
 
-
                 tabs[i].plotly_chart(otter_subfig, use_container_width=True)
+                
+                with tabs[i].expander('Detailed Dataframe'):
+                    
+                    builder = GridOptionsBuilder.from_dataframe(otter_df[['month', 'brand_name', 'item_name', 'price', 'total_orders', 'total_qty_ordered']])
+                    # builder.configure_selection(
+                    #     'multiple', 
+                    #     use_checkbox=True, 
+                    #     groupSelectsChildren=True, 
+                    #     groupSelectsFiltered=True
+                    # )
+                    builder.configure_default_column(
+                        groupable=True, 
+                        value=True, 
+                        enableRowGroup=True, 
+                        aggFunc='sum', editable=True
+                    )
 
+                    builder.configure_column("month", type=["dateColumnFilter","customDateTimeFormat"], custom_format_string='yyyy-MM-dd')
+                    builder.configure_column('item_name', aggFunc='sum')
+                    builder.configure_column('price', aggFunc='avg')
+                    builder.configure_column('total_orders', aggFunc='sum')
+                    builder.configure_column('total_qty_ordered', aggFunc='sum')
+                    builder.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
+                    go = builder.build()
+
+                    #uses the gridOptions dictionary to configure AgGrid behavior.
+                    grid_response = AgGrid(
+                        data=otter_df[['month', 'brand_name', 'item_name', 'price', 'total_orders', 'total_qty_ordered']], 
+                        gridOptions=go,
+                        update_mode=GridUpdateMode.__members__['GRID_CHANGED'],
+                        fit_columns_on_grid_load=True,
+                        )
+                    
+                    df = grid_response['data']
+                    selected = grid_response['selected_rows']
+                    selected_df = pd.DataFrame(selected)
+
+                    # st.dataframe(selected_df)
+
+                    csv = fun.convert_df(otter_df[['month', 'brand_name', 'item_name', 'price', 'total_orders', 'total_qty_ordered']])
+                    st.download_button(
+                        "Download Dataframe as CSV",
+                        csv,
+                        "otter_df.csv",
+                        "text/csv"
+                    )
+
+            tabs[i].markdown("""---""")
 
             if show_map:
                 with tabs[i]:
-                    folium_static(m, width=725)
-
-            if ofo_df.shape[0] > 0:
-                tabs[i].subheader('OFO Scrape Data')
-                # tabs[i].write(
-                #     'The OFO mean price in {city}, {country_code} in a radius of {radius} meters around the city center is {ofo_mean}. {item_count} items were used for the calculation.'.format(
-                #         city=city_input,
-                #         country_code = country_input,
-                #         radius = radius_input,
-                #         ofo_mean = round(ofo_mean,2),
-                #         item_count = ofo_df.shape[0]
-                #     )
-                # )
-
-                # tabs[i].plotly_chart(ofo_histogram, use_container_width=True)
-
-                tabs[i].write(ofo_df[['store_name', 'primary_cuisine', 'item_name', 'price']].drop_duplicates())
-
-            if otter_df.shape[0] > 0:
-
-                tabs[i].subheader('Otter Data')
-                tabs[i].write('The Otter data mean price in {city}, {country_code} in a radius of {radius} meters around the city center is {demand_mean}. \nWeighted by order volume the mean price would be {weighted_demand_mean}. {item_count} items were used for the calculation.'.format(
-                    city=city_input,
-                    country_code = country_input,
-                    radius = radius_input,
-                    demand_mean = round(otter_mean,2),
-                    weighted_demand_mean = round(weighted_otter_mean,2),
-                    item_count = otter_df.shape[0]
-                ))
-
-                otter_plot_df['month'] = pd.to_datetime(otter_plot_df['month'], format='%Y-%m-%d')
-
-
-                otter_subfig = make_subplots(specs=[[{"secondary_y": True}]])
-                otter_fig_bar = px.bar(x=otter_plot_df['month'], y=otter_plot_df['clean_name'])
-                otter_fig_line = px.line(x=otter_plot_df['month'], y=otter_plot_df['price'])
-                otter_fig_line.update_traces(line_color='#DD6046', line_width=5)
-                otter_fig_line.update_traces(yaxis="y2")
-                otter_subfig.add_traces(otter_fig_bar.data + otter_fig_line.data)
-                otter_subfig.layout.xaxis.title = 'Month'
-                otter_subfig.layout.yaxis.title = 'Unique Item Count'
-                otter_subfig.layout.yaxis2.title = 'Mean Price'
-
-
-                tabs[i].dataframe(otter_plot_df)
-
-                st.plotly_chart(otter_subfig)
-
-                tabs[i].dataframe(otter_df[['brand_name', 'item_name', 'clean_name','month', 'price', 'total_orders']].drop_duplicates())
+                        folium_static(m, width=1080)
 
         except Exception as e:
             tabs[i].write(e)
