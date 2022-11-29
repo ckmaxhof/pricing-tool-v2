@@ -17,6 +17,9 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import plotly.figure_factory as ff
 
+import nltk
+nltk.download('punkt') 
+
 st.set_page_config(
     page_title="Pricing Tool",
     page_icon='dollar',
