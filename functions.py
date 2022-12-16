@@ -82,7 +82,10 @@ def load_primary_cuisine():
 
 @st.cache
 def load_cities():
-    return pd.read_csv('/home/maximilian.hofmann/tools/brand_science_pricing/worldcities.csv').sort_values(['iso2'])
+    if socket.gethostname() == 'CSS-C02GK2KGQ6LT':
+        return pd.read_csv('/Users/maximilian.hofmann/projects/brand_science_pricing/worldcities.csv').sort_values(['iso2'])
+    else:
+        return pd.read_csv('/home/maximilian.hofmann/tools/brand_science_pricing/worldcities.csv').sort_values(['iso2'])
 
 @st.cache
 def load_store_names():

@@ -14,8 +14,11 @@ from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 import folium
 from folium.plugins import MarkerCluster
 import plotly.express as px
+import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.figure_factory as ff
+from pandasql import sqldf
+import math
 
 import nltk
 nltk.download('punkt') 
@@ -61,7 +64,8 @@ cities_input = city_col.multiselect(
 country_codes_input = country_col.multiselect(
     label='Country Codes',
     options=cities_df[cities_df['city'].isin(cities_input)]['iso2'].unique(),
-    on_change=fun.set_session_state_0
+    on_change=fun.set_session_state_0,
+    default='GB'
 )
 
 radius_input = radius_col.number_input('Radius (in km)', min_value=0, value=10, on_change=fun.set_session_state_0)
@@ -69,7 +73,7 @@ radius_input = radius_input * 1000
 
 search_option_col, search_string_col = st.columns([2, 8])
 search_method = search_option_col.radio('String Search Method', ('Contains', 'Equals'), on_change=fun.set_session_state_0)
-search_string_inputs = search_string_col.text_input('Please type in the items you are looking for. If multiple, please separate by comma.', on_change=fun.set_session_state_0)
+search_string_inputs = search_string_col.text_input('Please type in the items you are looking for. If multiple, please separate by comma.', on_change=fun.set_session_state_0, value='chicken tikka masala')
 
 with st.expander("Additional Filters"):
 
@@ -143,8 +147,6 @@ if st.session_state.s > 0:
         for lat, lng in zip(lats, lngs):
             folium.Circle([lat, lng], radius=radius_input).add_to(m)
 
-        tabs[i].title('Summary')
-
         try:
 
             ### CALCULATIONS
@@ -159,11 +161,40 @@ if st.session_state.s > 0:
                 fun.get_exclude_store_names_query(exclude_store_names)
                 ) 
 
+            ### Demand
+            otter_df = fun.load_otter_data(
+                fun.get_country_codes_filter(country_codes), 
+                fun.get_st_distance_filters(lats, lngs, radius_input),
+                fun.get_search_term_query(search_string_input, search_method), 
+                fun.get_exclude_term_query(exclude_string_input), 
+                fun.get_exclude_brand_names_query(exclude_store_names)
+            )
+
             histogram_df = pd.DataFrame()
+
+
+            date_list = np.unique(ofo_df['month'].tolist() + otter_df['month'].tolist())
+            date_list = [pd.to_datetime(x).strftime('%Y-%m-%d') for x in date_list]
+
+            c1, c2 = tabs[i].columns([4,8])
+
+            with c1:
+                c1.markdown('### Select a date range for the data')
+                start_date, end_date = c1.select_slider(
+                    label='Date Range',
+                    label_visibility='collapsed',
+                    options=date_list,
+                    value=(date_list[0], date_list[-1])
+                )
+
+            ofo_df = ofo_df[(ofo_df['month']>=start_date)&(ofo_df['month']<=end_date)]
+            otter_df = otter_df[(otter_df['month']>=pd.to_datetime(start_date))&(otter_df['month']<=pd.to_datetime(end_date))]
 
             if ofo_df.shape[0] > 0:
                 ofo_mean = ofo_df.price.mean()
                 ofo_median = ofo_df.price.median()
+                ofo_max_month = ofo_df['month'].max()
+                ofo_min_month = ofo_df['month'].min()
 
                 ofo_plot_df = ofo_df.groupby(['month']).agg(
                     clean_name=("clean_name", "nunique"),
@@ -201,15 +232,7 @@ if st.session_state.s > 0:
                 ofo_median = np.nan
                 tabs[i].warning('There is not enough OFO scrape data to show metrics.', icon="⚠️")
 
-            ### Demand
-            otter_df = fun.load_otter_data(
-                fun.get_country_codes_filter(country_codes), 
-                fun.get_st_distance_filters(lats, lngs, radius_input),
-                fun.get_search_term_query(search_string_input, search_method), 
-                fun.get_exclude_term_query(exclude_string_input), 
-                fun.get_exclude_brand_names_query(exclude_store_names)
-            )
-
+            
             if otter_df.shape[0] != 0:
                 wm = lambda x: np.average(x, weights=otter_df.loc[x.index, "total_qty_ordered"])
                 otter_plot_df = otter_df.groupby(['month']).agg(
@@ -217,6 +240,12 @@ if st.session_state.s > 0:
                     price=("price", "mean"),
                     weighted_price=("price", wm)
                 ).reset_index(drop=False)
+
+                otter_max_month = otter_df['month'].max()
+                otter_min_month = otter_df['month'].min()
+
+                otter_cumsum_df = otter_df.groupby('price').agg({'total_orders':'sum'}).reset_index(drop=False).sort_values('price', ascending=True)
+                otter_cumsum_df['cumsum'] = otter_cumsum_df['total_orders'].cumsum()
                 
                 recent_updates_by_item_df = otter_df.groupby(['brand_name','item_name']).agg({'month':'max'}).reset_index(drop=False)
                 recent_prices_df = pd.merge(otter_df, recent_updates_by_item_df, on=['brand_name','item_name','month'], how='inner')
@@ -244,19 +273,26 @@ if st.session_state.s > 0:
                     marker_cluster.add_to(m)  
 
             else:
+                otter_max_month = np.nan
+                otter_min_month = np.nan
                 otter_mean = np.nan
                 otter_median = np.nan
                 weighted_otter_mean = np.nan
                 otter_mean_last_month = np.nan
                 tabs[i].warning('There is not enough Otter data to show metrics.', icon="⚠️")
+            
 
-            metric_col_ofo_1, metric_col_ofo_2, _, _ = tabs[i].columns(4)
+
+            summary_ep = tabs[i].expander(label='Summary', expanded=True)
+
+            summary_ep.title('Summary')
+            metric_col_ofo_1, metric_col_ofo_2, _, _ = summary_ep.columns(4)
             with metric_col_ofo_1:
                 metric_col_ofo_1.metric('OFO Scrape Mean Price', '{}'.format(round(ofo_mean, 2)))
             with metric_col_ofo_2:
                 metric_col_ofo_2.metric('OFO Scrape Median Price', '{}'.format(round(ofo_median, 2)))
 
-            metric_col_otter_1, metric_col_otter_2, metric_col_otter_3, metric_col_otter_4 = tabs[i].columns(4)
+            metric_col_otter_1, metric_col_otter_2, metric_col_otter_3, metric_col_otter_4 = summary_ep.columns(4)
 
             with metric_col_otter_1:
                 metric_col_otter_1.metric('Otter Mean Price', '{}'.format(round(otter_mean, 2)))
@@ -274,10 +310,10 @@ if st.session_state.s > 0:
                 histogram_df[histogram_df['data_source']=='OFO Scrape']['price'].tolist(),
                 histogram_df[histogram_df['data_source']=='Otter']['price'].tolist()    
             ]
-
-            tabs[i].markdown('## Prices Histogram')
-            tabs[i].write('The following numbers of items were used to calculate these distributions.')
-            hist_count_1, hist_count_2, hist_count_3 = tabs[i].columns(3)
+            price_hist_ep = tabs[i].expander(label='Price Histogram', expanded=True)
+            price_hist_ep.markdown('## Prices Histogram')
+            price_hist_ep.write('The following numbers of items were used to calculate these distributions.')
+            hist_count_1, hist_count_2, hist_count_3 = price_hist_ep.columns(3)
             with hist_count_1:
                 hist_count_1.metric('Overall Item Count', '{}'.format(f"{histogram_df.shape[0]:,}"))
             with hist_count_2:
@@ -286,13 +322,110 @@ if st.session_state.s > 0:
                 hist_count_3.metric('Otter Item Count', '{}'.format(f"{histogram_df[histogram_df['data_source']=='Otter'].shape[0]:,}"))
 
             fig = ff.create_distplot(histogram_data, ['OFO Scrape', 'Otter'], show_rug=False)
-            tabs[i].plotly_chart(fig, use_container_width=True)
+            price_hist_ep.plotly_chart(fig, use_container_width=True)
+
+            price_cumulative_ep = tabs[i].expander(label='Supply / Demand Graph', expanded=True)
+            price_cumulative_ep.markdown('### Supply / Demand Graph')
+            price_cumulative_ep.markdown('''
+                This graph shows the Demand & Supply Curve for the market of the food item(s) you selected. How to interpret the axes:
+                * Demand Curve: Given a specific price bucket (X axis) how many % of orders would fetch if we would set the price there.
+                * Supply Curve: How many % of items in the market are offered at this price point.
+            ''')
+            bin_width = price_cumulative_ep.slider(
+                label='Choose the size of your price buckets', 
+                min_value=0.1,
+                max_value=5.0,
+                value=1.0,
+                step=0.01,
+            )
+
+            nbins = math.ceil((otter_df["price"].max() - otter_df["price"].min()) / bin_width)
+            otter_cum_df = otter_df[['price', 'total_orders']]
+            otter_cum_df['bin'] = pd.cut(otter_cum_df['price'], nbins, include_lowest = True)
+            grouped_df = otter_cum_df.groupby('bin').agg({'total_orders':'sum'}).reset_index(drop=False)
+            grouped_df['min_price'] = grouped_df['bin'].apply(lambda x: x.left.astype(float))
+            grouped_df['max_price'] = grouped_df['bin'].apply(lambda x: float(x.right))
+            grouped_df['cumsum'] = grouped_df['total_orders'].cumsum()
+            grouped_df['perc_cumsum'] = grouped_df['cumsum'].apply(lambda x: 1 - x/grouped_df['cumsum'].max())
+            grouped_df['perc_cumsum_text'] = grouped_df['perc_cumsum'].apply(lambda x: '{}%'.format(round(x*100, 2)))
+            grouped_df['bin'] = grouped_df['bin'].astype(str)
+
+            pysqldf = lambda q: sqldf(q, globals())
+            otter_ofo_grouped_df = pysqldf('''
+                SELECT  
+                    a.bin,
+                    a.total_orders,
+                    CAST(a.min_price AS DOUBLE) AS min_price,
+                    a.max_price,
+                    a.cumsum,
+                    a.perc_cumsum,
+                    a.perc_cumsum_text,
+                    COUNT(b.item_name) AS ofo_item_count
+                FROM grouped_df a
+                LEFT JOIN ofo_df b ON (b.price > a.min_price AND b.price <= a.max_price)
+                GROUP BY 1,2,3,4,5,6,7
+                ORDER BY a.min_price ASC
+            ''')
+            otter_ofo_grouped_df = otter_ofo_grouped_df.sort_values('min_price', ascending=True)
+            otter_ofo_grouped_df['cumsum_ofo'] = otter_ofo_grouped_df['ofo_item_count'].cumsum()
+            otter_ofo_grouped_df['perc_cumsum_ofo'] = otter_ofo_grouped_df['cumsum_ofo'].apply(lambda x: x/otter_ofo_grouped_df['cumsum_ofo'].max())
+            otter_ofo_grouped_df['perc_cumsum_text_ofo'] = otter_ofo_grouped_df['perc_cumsum_ofo'].apply(lambda x: '{}%'.format(round(x*100, 2)))
+
+            otter_ofo_grouped_df.style.format({'perc_cumsum':"{:.2%}"})
+            otter_ofo_grouped_df['price_bins'] = otter_ofo_grouped_df['bin'].astype(str)
+
+            otter_ds_plot_df = otter_ofo_grouped_df[['price_bins', 'perc_cumsum', 'perc_cumsum_text']]
+            otter_ds_plot_df['Curve'] = 'Demand Curve'
+            ofo_ds_plot_df = otter_ofo_grouped_df[['price_bins', 'perc_cumsum_ofo', 'perc_cumsum_text_ofo']]
+            ofo_ds_plot_df.columns = ['price_bins', 'perc_cumsum', 'perc_cumsum_text']
+            ofo_ds_plot_df['Curve'] = 'Supply Curve'
+
+            plot_df = pd.concat([otter_ds_plot_df, ofo_ds_plot_df])
+            fig = px.line(plot_df, x='price_bins', y='perc_cumsum', color='Curve', markers=True)
+            fig.layout.yaxis.title = 'Cumulative Orders % | Cumulative Item Count %'
+
+            price_cumulative_ep.plotly_chart(fig, use_container_width=False)
+
+            # cumsum_subfig = make_subplots(specs=[[{"secondary_y": True}]])
+            # # cumsum_fig_bar = px.bar(grouped_df, x='price_bins', y='cumsum')
+            # cumsum_fig_line = px.line(otter_ofo_grouped_df, x='price_bins', y='perc_cumsum', text='perc_cumsum_text')
+            # cumsum_fig_line.update_traces(line_color='#DD6046', line_width=5)
+            # cumsum_fig_line.update_traces(yaxis="y2")
+            # cumsum_fig_line.update_traces(
+            #     textfont=dict(
+            #         size=10,
+            #         color="#DD6046",
+            #     ),
+            #     textposition='top center'
+            # )
+            # cumsum_fig_ofo_line = px.line(otter_ofo_grouped_df, x='price_bins', y='perc_cumsum_ofo', text='perc_cumsum_text_ofo')
+            # cumsum_fig_ofo_line.update_traces(yaxis="y2")
+            # cumsum_fig_ofo_line.update_traces(line_color='#696CFA', line_width=5)
+            # cumsum_fig_ofo_line.update_traces(
+            #     textfont=dict(
+            #         size=10,
+            #         color="#696CFA",
+            #     ),
+            #     textposition='top center'
+            # )
+            # # cumsum_subfig.add_traces(cumsum_fig_bar.data + cumsum_fig_line.data)
+            # cumsum_subfig.add_traces(cumsum_fig_ofo_line.data + cumsum_fig_line.data)
+
+            # cumsum_subfig.layout.xaxis.title = 'Price Buckets'
+            # # cumsum_subfig.layout.yaxis.title = 'Cumulative Orders'
+            # cumsum_subfig.layout.yaxis2.title = 'Cumulative Orders % | Cumulative Item Count %'
+            # cumsum_subfig.layout.yaxis2.tickformat = ',.0%'
+
+            # price_cumulative_ep.plotly_chart(cumsum_subfig, use_container_width=False)
+
+
 
             tabs[i].markdown("""---""")
 
+            ofo_historical_ep = tabs[i].expander(label='Historical OFO Prices', expanded=True)
             if ofo_df.shape[0] > 0:
-                tabs[i].markdown('## Historical Prices Ofo Scrapes')
-                tabs[i].write('This chart illustrates the historical price development of OFO scrape means.')
+                ofo_historical_ep.markdown('## Historical Prices Ofo Scrapes')
+                ofo_historical_ep.write('This chart illustrates the historical price development of OFO scrape means.')
 
                 ofo_plot_df['month'] = pd.to_datetime(ofo_plot_df['month'], format='%Y-%m-%d')
 
@@ -306,9 +439,9 @@ if st.session_state.s > 0:
                 ofo_subfig.layout.yaxis.title = 'Unique Item Count'
                 ofo_subfig.layout.yaxis2.title = 'Mean Price'
 
-                tabs[i].plotly_chart(ofo_subfig, use_container_width=True)
+                ofo_historical_ep.plotly_chart(ofo_subfig, use_container_width=True)
 
-                with tabs[i].expander('Detailed Dataframe'):
+                with tabs[i].expander('OFO Detailed Dataframe', expanded=False):
                     
                     builder = GridOptionsBuilder.from_dataframe(ofo_df[['month', 'primary_cuisine', 'store_name', 'item_name', 'price']])
                     # builder.configure_selection(
@@ -352,9 +485,10 @@ if st.session_state.s > 0:
                         "text/csv"
                     )
 
+            otter_historical_ep = tabs[i].expander(label='Historical Otter Prices', expanded=True)
             if otter_df.shape[0] > 0:
-                tabs[i].markdown('## Historical Prices Otter')
-                tabs[i].write('This chart illustrates the historical price development of Otter means. The weighted mean price is the average price per month, weighted by the quantity the item was ordered.')
+                otter_historical_ep.markdown('## Historical Prices Otter')
+                otter_historical_ep.write('This chart illustrates the historical price development of Otter means. The weighted mean price is the average price per month, weighted by the quantity the item was ordered.')
 
                 otter_plot_df['month'] = pd.to_datetime(otter_plot_df['month'], format='%Y-%m-%d')
                 
@@ -371,9 +505,9 @@ if st.session_state.s > 0:
                 otter_subfig.layout.yaxis.title = 'Unique Item Count'
                 otter_subfig.layout.yaxis2.title = 'Mean Price'
 
-                tabs[i].plotly_chart(otter_subfig, use_container_width=True)
+                otter_historical_ep.plotly_chart(otter_subfig, use_container_width=True)
                 
-                with tabs[i].expander('Detailed Dataframe'):
+                with tabs[i].expander('Otter Detailed Dataframe', expanded=False):
                     
                     builder = GridOptionsBuilder.from_dataframe(otter_df[['month', 'brand_name', 'item_name', 'price', 'total_orders', 'total_qty_ordered']])
                     # builder.configure_selection(
@@ -408,16 +542,6 @@ if st.session_state.s > 0:
                     df = grid_response['data']
                     selected = grid_response['selected_rows']
                     selected_df = pd.DataFrame(selected)
-
-                    # st.dataframe(selected_df)
-
-                    csv = fun.convert_df(otter_df[['month', 'brand_name', 'item_name', 'price', 'total_orders', 'total_qty_ordered']])
-                    st.download_button(
-                        "Download Dataframe as CSV",
-                        csv,
-                        "otter_df.csv",
-                        "text/csv"
-                    )
 
             tabs[i].markdown("""---""")
 
