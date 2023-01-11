@@ -21,7 +21,8 @@ from pandasql import sqldf
 import math
 
 import nltk
-nltk.download('punkt') 
+nltk.data.path.append('/home/maximilian.hofmann/nltk')
+nltk.download('punkt', download_dir='/home/maximilian.hofmann/nltk') 
 
 st.set_page_config(
     page_title="Pricing Tool",
@@ -63,7 +64,7 @@ cities_input = city_col.multiselect(
 
 country_codes_input = country_col.multiselect(
     label='Country Codes',
-    options=cities_df[cities_df['city'].isin(cities_input)]['iso2'].unique(),
+    options=cities_df['iso2'].unique(),
     on_change=fun.set_session_state_0,
     default='GB'
 )
