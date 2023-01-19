@@ -129,6 +129,43 @@ def process_ofo_data_date_range(sql_template, date_range, collection, service_sl
             schema=const.pricing_ofo_scrape_data_schema,
             how='WRITE_APPEND'
         )
+    
+def process_ofo_data_date_range_iceberg(sql_template, date_range, super_region, service_slug, full_table_name, clustering_fields): 
+    
+    sql = sql_template.format(begin_date=date_range[0], end_date=date_range[1], super_region=super_region, service_slug=service_slug)    
+    data = ds_trino.fetch_data(sql)
+    
+    if data.shape[0] > 0:
+    
+        data = get_clean_item_name_column(data, 'item_name')
+        data = geo_utils.get_country_codes_from_latlng_df(data)
+
+        data['categories'] = data['categories'].apply(lambda x: ','.join(x).lower() if isinstance(x, list) else None)
+        data['month'] = pd.to_datetime(data['month'])
+        data['_loaded_at'] = pd.to_datetime(datetime.now())
+
+        data['unique_key'] = data['month'].astype(str) + data['external_store_id'] + data['item_id']
+
+        data = data[[
+            'month', 'item_id', 'item_name', 'clean_name', 'price', 'currency_code',
+            'item_count', 'drink_qty', 'weight', 'store_name',
+            'external_store_id', 'categories', 'primary_cuisine', 'latitude',
+            'longitude', 'city', 'country_code', 'service_slug', 'source', '_loaded_at', 'unique_key'
+        ]].reset_index(drop=True)
+
+        data['latitude'] = data['latitude'].astype(np.float64)
+        data['longitude'] = data['longitude'].astype(np.float64)
+
+        bg = BigQuery(oauth_file=oauth_file)
+
+        return bg.upload_to_table_from_df(
+            df=data, 
+            tbl_id=full_table_name,
+            clustering_fields=clustering_fields,
+            schema=const.pricing_ofo_scrape_data_schema,
+            how='WRITE_APPEND'
+        )
+
 
 def process_otter_data_date_range(sql_template, date_range, country_code, full_table_name, clustering_fields):
     
@@ -295,10 +332,3 @@ def upsert_tbl_ofo_scrape_data(stag_table, prod_table):
     '''.format(prod_table, stag_table)
     
     return bg.run_query(upsert_sql)
-    
-
-    
-    
-    
-    
-    
