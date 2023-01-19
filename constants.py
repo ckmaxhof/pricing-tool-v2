@@ -1,3 +1,5 @@
+USER_NAME = 'maximilian.hofmann'
+
 country_codes = ['GB', 'US', 'AU', 'FR', 'CO', 'MX', 'BR', 'MY', 'SG']
 
 ignore_stem_words = ['fried','fries']

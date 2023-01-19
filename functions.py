@@ -1,6 +1,8 @@
 import sys
-sys.path.append('/home/maximilian.hofmann/tools/brand_science_pricing')
+sys.path.append('/home/maximilian.hofmann/tools/pricing-tool-v2')
+sys.path.append('/Users/maximilian.hofmann/projects/pricing-tool-v2')
 sys.path.append('/home/maximilian.hofmann/ff_utils/src')
+sys.path.append('/Users/maximilian.hofmann/projects/ff_utils/src')
 
 import config
 
