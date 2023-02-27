@@ -14,6 +14,7 @@ from ds.utilities.io import ds_trino
 import const
 
 oauth_file = '/home/maximilian.hofmann/_secrets/gc_oauth_brand_science.json'
+svc_account_file = '/home/maximilian.hofmann/_secrets/brand_science_svc_account.json'
 
 def get_clean_item_name_column(df, source_col = 'item_name'):
     
@@ -80,7 +81,7 @@ def process_ofo_data(t, full_table_name, clustering_fields=['country_code','mont
            'longitude', 'city', 'country_code', 'service_slug', 'source', '_loaded_at'
           ]].reset_index(drop=True)
     
-    bg = BigQuery(oauth_file='/home/maximilian.hofmann/_secrets/gc_oauth_brand_science.json')
+    bg = BigQuery(svc_account_file='/home/maximilian.hofmann/_secrets/brand_science_svc_account.json')
     
     load_job = bg.upload_to_table_from_df(
         df=t, 
@@ -120,7 +121,7 @@ def process_ofo_data_date_range(sql_template, date_range, collection, service_sl
         data['latitude'] = data['latitude'].astype(np.float64)
         data['longitude'] = data['longitude'].astype(np.float64)
 
-        bg = BigQuery(oauth_file=oauth_file)
+        bg = BigQuery(svc_account_file='/home/maximilian.hofmann/_secrets/brand_science_svc_account.json')
 
         return bg.upload_to_table_from_df(
             df=data, 
@@ -156,7 +157,7 @@ def process_ofo_data_date_range_iceberg(sql_template, date_range, super_region, 
         data['latitude'] = data['latitude'].astype(np.float64)
         data['longitude'] = data['longitude'].astype(np.float64)
 
-        bg = BigQuery(oauth_file=oauth_file)
+        bg = BigQuery(svc_account_file='/home/maximilian.hofmann/_secrets/brand_science_svc_account.json')
 
         return bg.upload_to_table_from_df(
             df=data, 
@@ -190,7 +191,7 @@ def process_otter_data_date_range(sql_template, date_range, country_code, full_t
     data['latitude'] = data['latitude'].astype(np.float64)
     data['longitude'] = data['longitude'].astype(np.float64)
     
-    bg = BigQuery(oauth_file=oauth_file)
+    bg = BigQuery(svc_account_file='/home/maximilian.hofmann/_secrets/brand_science_svc_account.json')
     
     return bg.upload_to_table_from_df(
         df=data, 
@@ -201,7 +202,7 @@ def process_otter_data_date_range(sql_template, date_range, country_code, full_t
     )
 
 def create_tbl(stag_table, prod_table):
-    bg = BigQuery(oauth_file=oauth_file)
+    bg = BigQuery(svc_account_file='/home/maximilian.hofmann/_secrets/brand_science_svc_account.json')
     
     create_tbl_sql = '''
         CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM {} LIMIT 1
@@ -210,7 +211,7 @@ def create_tbl(stag_table, prod_table):
     return bg.run_query(create_tbl_sql)
 
 def upsert_tbl_otter_data(stag_table, prod_table):
-    bg = BigQuery(oauth_file=oauth_file)
+    bg = BigQuery(svc_account_file='/home/maximilian.hofmann/_secrets/brand_science_svc_account.json')
     
     upsert_sql = '''
         MERGE {} prod
@@ -275,7 +276,7 @@ def upsert_tbl_otter_data(stag_table, prod_table):
     return bg.run_query(upsert_sql)
 
 def upsert_tbl_ofo_scrape_data(stag_table, prod_table):
-    bg = BigQuery(oauth_file=oauth_file)
+    bg = BigQuery(svc_account_file='/home/maximilian.hofmann/_secrets/brand_science_svc_account.json')
     
     upsert_sql = '''
         MERGE {} prod

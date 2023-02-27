@@ -30,6 +30,8 @@ st.set_page_config(
     layout='wide'
 )
 
+st.markdown('## PLEASE USE THE UPDATED PRICING TOOL VIA [THIS LINK](https://data-apps.cssinternal.com/changyun.han/brand-science-pricing/')
+
 # user_id, user_email = login_info
 user_actions = {}
 user_actions['tool_name'] = 'brand_science_pricing'
