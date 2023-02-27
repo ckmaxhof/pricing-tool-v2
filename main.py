@@ -1,6 +1,8 @@
 import sys
-sys.path.append('/home/maximilian.hofmann/tools/brand_science_pricing')
+sys.path.append('/home/maximilian.hofmann/tools/pricing-tool-v2')
+sys.path.append('/Users/projects/maximilian.hofmann/tools/pricing-tool-v2')
 sys.path.append('/home/maximilian.hofmann/ff_utils/src')
+sys.path.append('/Users/projects/maximilian.hofmann/ff_utils/src')
 
 import constants as const
 import functions as fun
@@ -22,7 +24,8 @@ import math
 
 import nltk
 nltk.data.path.append('/home/maximilian.hofmann/nltk')
-nltk.download('punkt', download_dir='/home/maximilian.hofmann/nltk') 
+nltk.data.path.append('/Users/maximilian.hofmann/nltk')
+nltk.download('punkt', download_dir='/Users/maximilian.hofmann/nltk') 
 
 st.set_page_config(
     page_title="Pricing Tool",
